@@ -12,6 +12,7 @@ import MindOfAgentCore
 final class AppCoordinator: ObservableObject {
     @Published private(set) var snapshot: NodeRegistry.Snapshot
     @Published private(set) var startupError: String?
+    @Published private(set) var paused: Bool = false
 
     private let registry: NodeRegistry
     private let discovery: Discovery
@@ -41,10 +42,40 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+<<<<<<< HEAD
     deinit {
         // AppCoordinator is process-lifetime today, but a deinit-paired
         // stop() keeps the NWListener + NWBrowser from leaking if the
         // coordinator is ever re-created (previews, future tests).
         discovery.stop()
+=======
+    // MARK: - Pause / resume
+
+    /// Stop advertising and browsing. The local registry freezes at its
+    /// last-known state — peers will no longer see this node and this node
+    /// will stop seeing departures, but already-known peers stay in the
+    /// menu until a resume drives a fresh browse cycle.
+    func pause() {
+        guard !paused else { return }
+        discovery.stop()
+        paused = true
+    }
+
+    /// Re-advertise + re-browse. Clears the existing snapshot so the
+    /// post-resume view rebuilds purely from fresh browse results.
+    func resume() {
+        guard paused else { return }
+        do {
+            try discovery.start()
+            paused = false
+            startupError = nil
+        } catch {
+            startupError = "Resume failed: \(error.localizedDescription)"
+        }
+    }
+
+    func togglePause() {
+        paused ? resume() : pause()
+>>>>>>> 9e95079 (feat(coordinator): pause()/resume()/togglePause() driving Discovery start/stop)
     }
 }

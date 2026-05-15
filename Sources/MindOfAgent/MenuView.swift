@@ -21,6 +21,11 @@ struct MenuView: View {
         HStack {
             Text("Cluster peers")
                 .font(.headline)
+            if coordinator.paused {
+                Text("· paused")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
             Spacer()
             Text("\(coordinator.snapshot.nodes.count)")
                 .foregroundStyle(.secondary)
@@ -46,10 +51,23 @@ struct MenuView: View {
     }
 
     private var footer: some View {
-        Button("Quit MindOfAgent") {
-            NSApplication.shared.terminate(nil)
+        VStack(alignment: .leading, spacing: 4) {
+            Button(coordinator.paused ? "Resume Discovery" : "Pause Discovery") {
+                coordinator.togglePause()
+            }
+            // Pausing only makes sense if Discovery is actually running. When
+            // startup failed (`startupError != nil`), the listener/browser
+            // were never live — disabling the button avoids the confusing
+            // three-indicator state (red error + orange paused tag + slash
+            // icon) flagged in the PR #23 review.
+            .disabled(coordinator.startupError != nil)
+            .keyboardShortcut("p")
+
+            Button("Quit MindOfAgent") {
+                NSApplication.shared.terminate(nil)
+            }
+            .keyboardShortcut("q")
         }
-        .keyboardShortcut("q")
     }
 }
 
