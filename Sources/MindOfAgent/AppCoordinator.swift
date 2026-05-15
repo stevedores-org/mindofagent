@@ -9,6 +9,9 @@ import MindOfAgentCore
 /// FIFO order — `Task { @MainActor in … }` does not guarantee execution
 /// order relative to spawn order, and a burst of registry mutations could
 /// otherwise produce momentary UI flicker as snapshots arrive out-of-order.
+/// The class itself is `@MainActor` so SwiftUI callers can invoke
+/// `pause()` / `resume()` directly without isolation hops.
+@MainActor
 final class AppCoordinator: ObservableObject {
     @Published private(set) var snapshot: NodeRegistry.Snapshot
     @Published private(set) var startupError: String?
@@ -42,13 +45,13 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-<<<<<<< HEAD
     deinit {
         // AppCoordinator is process-lifetime today, but a deinit-paired
         // stop() keeps the NWListener + NWBrowser from leaking if the
         // coordinator is ever re-created (previews, future tests).
         discovery.stop()
-=======
+    }
+
     // MARK: - Pause / resume
 
     /// Stop advertising and browsing. The local registry freezes at its
@@ -61,8 +64,11 @@ final class AppCoordinator: ObservableObject {
         paused = true
     }
 
-    /// Re-advertise + re-browse. Clears the existing snapshot so the
-    /// post-resume view rebuilds purely from fresh browse results.
+    /// Re-advertise + re-browse. The registry keeps its last snapshot; once
+    /// the new browser starts firing, stale peers are pruned via
+    /// `Discovery.handle(results:)`'s diff. Briefly (≤ ~2 s) the menu may
+    /// show peers that have left the network — they vacate on the first
+    /// browse update.
     func resume() {
         guard paused else { return }
         do {
@@ -75,7 +81,10 @@ final class AppCoordinator: ObservableObject {
     }
 
     func togglePause() {
+        // Refuse to toggle while in a startup-error state. The pause button
+        // is also disabled in the view, but this guard makes the contract
+        // explicit at the model layer too.
+        guard startupError == nil else { return }
         paused ? resume() : pause()
->>>>>>> 9e95079 (feat(coordinator): pause()/resume()/togglePause() driving Discovery start/stop)
     }
 }
