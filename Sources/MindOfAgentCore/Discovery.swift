@@ -80,13 +80,21 @@ public final class Discovery: @unchecked Sendable {
     }
 
     private func handle(results: Set<NWBrowser.Result>) {
-        let seenIDs = Set(results.map { Discovery.identifier(for: $0) })
+        // Skip results we can't derive a stable id from (`.opaque` / `@unknown`).
+        // Otherwise each browse callback would mint a fresh UUID for the same
+        // endpoint and the stale-cleanup loop would never converge.
+        let identified: [(id: String, result: NWBrowser.Result)] =
+            results.compactMap { result in
+                guard let id = Discovery.identifier(for: result) else { return nil }
+                return (id, result)
+            }
+
+        let seenIDs = Set(identified.map(\.id))
         let current = Set(registry.snapshot().nodes.map(\.id))
         for stale in current.subtracting(seenIDs) {
             registry.remove(id: stale)
         }
-        for result in results {
-            let id = Discovery.identifier(for: result)
+        for (id, result) in identified {
             let txt = Discovery.txtRecord(from: result)
             let (host, port) = Discovery.endpointAddress(result.endpoint)
             let displayHost = txt["host"] ?? id
@@ -104,7 +112,11 @@ public final class Discovery: @unchecked Sendable {
 
     // MARK: - Helpers
 
-    static func identifier(for result: NWBrowser.Result) -> String {
+    /// Return a stable id derived from the endpoint, or `nil` if the endpoint
+    /// kind can't be mapped to a deterministic identifier. `nil` is what
+    /// signals `handle(results:)` to skip the result rather than synthesising
+    /// a UUID that would never stay stable across callbacks.
+    static func identifier(for result: NWBrowser.Result) -> String? {
         switch result.endpoint {
         case .service(let name, let type, let domain, _):
             return "\(name).\(type)\(domain)"
@@ -115,9 +127,9 @@ public final class Discovery: @unchecked Sendable {
         case .url(let url):
             return url.absoluteString
         case .opaque:
-            return UUID().uuidString
+            return nil
         @unknown default:
-            return UUID().uuidString
+            return nil
         }
     }
 
