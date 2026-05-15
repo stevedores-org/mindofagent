@@ -34,6 +34,45 @@ final class NodeRegistryTests: XCTestCase {
         XCTAssertEqual(stored.lastSeen, later, "lastSeen must be updated on re-upsert")
     }
 
+    /// Regression for the PR #18 review: upsert previously dropped every
+    /// field except `lastSeen` on update. The registry must take every
+    /// field from the new value except `firstSeen` so that a peer's TXT
+    /// record / port / host changes propagate.
+    func testUpsertReplacesAllFieldsExceptFirstSeen() {
+        let registry = NodeRegistry()
+        let firstSeen = Date(timeIntervalSince1970: 1_700_000_000)
+        let later = firstSeen.addingTimeInterval(60)
+
+        registry.upsert(Node(
+            id: "a",
+            hostname: "alpha-old",
+            host: "10.0.0.1",
+            port: 11_111,
+            txtRecord: ["chip": "M3"],
+            firstSeen: firstSeen,
+            lastSeen: firstSeen
+        ))
+
+        registry.upsert(Node(
+            id: "a",
+            hostname: "alpha-new",
+            host: "10.0.0.2",
+            port: 22_222,
+            txtRecord: ["chip": "M4", "mem_gb": "64"],
+            firstSeen: later, // should be ignored — firstSeen is sticky
+            lastSeen: later
+        ))
+
+        let stored = registry.snapshot().nodes.first!
+        XCTAssertEqual(stored.firstSeen, firstSeen, "firstSeen is sticky from first-observed")
+        XCTAssertEqual(stored.lastSeen, later)
+        XCTAssertEqual(stored.hostname, "alpha-new")
+        XCTAssertEqual(stored.host, "10.0.0.2")
+        XCTAssertEqual(stored.port, 22_222)
+        XCTAssertEqual(stored.txtRecord["chip"], "M4")
+        XCTAssertEqual(stored.txtRecord["mem_gb"], "64")
+    }
+
     // MARK: - remove
 
     func testRemoveDeletesById() {
@@ -70,23 +109,33 @@ final class NodeRegistryTests: XCTestCase {
 
     // MARK: - subscribe
 
-    func testSubscribeFiresSynchronouslyWithInitialSnapshot() {
+    func testSubscribeDeliversInitialSnapshot() {
         let registry = NodeRegistry()
         registry.upsert(Self.makeNode(id: "a", hostname: "alpha"))
 
+        let received = expectation(description: "initial snapshot delivered")
+        let lock = NSLock()
         var observed: [[String]] = []
         registry.subscribe { snap in
+            lock.lock(); defer { lock.unlock() }
             observed.append(snap.nodes.map(\.id))
+            if observed.count == 1 { received.fulfill() }
         }
 
-        XCTAssertEqual(observed.first, ["a"], "subscribe must fire synchronously with current snapshot")
+        wait(for: [received], timeout: 2)
+        XCTAssertEqual(observed.first, ["a"], "subscribe must deliver the current snapshot")
     }
 
     func testSubscribeFiresOnEachMutation() {
         let registry = NodeRegistry()
+        let received = expectation(description: "all four snapshots delivered")
+        received.expectedFulfillmentCount = 4
+        let lock = NSLock()
         var observed: [[String]] = []
         registry.subscribe { snap in
+            lock.lock(); defer { lock.unlock() }
             observed.append(snap.nodes.map(\.id))
+            received.fulfill()
         }
 
         // Initial empty snapshot from subscribe + one fire per mutation = 4 total.
@@ -94,11 +143,31 @@ final class NodeRegistryTests: XCTestCase {
         registry.upsert(Self.makeNode(id: "b", hostname: "bravo"))
         registry.remove(id: "a")
 
-        XCTAssertEqual(observed.count, 4, "expected: initial empty + 3 mutations")
+        wait(for: [received], timeout: 2)
         XCTAssertEqual(observed[0], [])
         XCTAssertEqual(observed[1], ["a"])
         XCTAssertEqual(observed[2], ["a", "b"])
         XCTAssertEqual(observed[3], ["b"])
+    }
+
+    /// Regression for the PR #18 review: observers used to be invoked
+    /// inside `queue.sync`, so an observer calling back into the registry
+    /// would deadlock on the serial queue. The test calls `snapshot()` from
+    /// inside an observer; previously this would hang forever.
+    func testObserverMayCallBackIntoRegistryWithoutDeadlock() {
+        let registry = NodeRegistry()
+        let observed = expectation(description: "observer received snapshot")
+        observed.expectedFulfillmentCount = 2 // initial empty + 1 mutation
+
+        registry.subscribe { _ in
+            // Re-entrant read — must not deadlock.
+            _ = registry.snapshot()
+            observed.fulfill()
+        }
+
+        registry.upsert(Self.makeNode(id: "a", hostname: "alpha"))
+
+        wait(for: [observed], timeout: 2)
     }
 
     // MARK: - concurrency
