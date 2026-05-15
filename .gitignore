@@ -1,7 +1,10 @@
 # SwiftPM build artifacts
 .build/
 .swiftpm/
-Package.resolved
+
+# Note: Package.resolved is *intentionally not ignored*. MindOfAgent is an
+# executable, not a library, so the lockfile is committed to keep builds
+# reproducible. (Swift docs: "executable packages should commit Package.resolved.")
 
 # Xcode
 DerivedData/
