@@ -1,0 +1,27 @@
+# SwiftPM build artifacts
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+
+# macOS detritus
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor / OS
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Generated artifacts
+/dist/
+/build/
