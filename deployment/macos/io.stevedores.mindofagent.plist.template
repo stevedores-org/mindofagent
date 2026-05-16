@@ -24,14 +24,24 @@
         <true/>
     </dict>
 
+    <!-- Only load in the user's Aqua session. Without this key launchd
+         also tries to load the agent in LoginWindow / Background, where
+         there is no menu bar to render into. -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+
     <!-- Interactive: app touches the user's GUI session, which is the
          whole point of MenuBarExtra. -->
     <key>ProcessType</key>
     <string>Interactive</string>
 
+    <!-- Logs in ~/Library/Logs/MindOfAgent (per-user, no symlink-attack
+         surface, survives reboot, picked up by Console.app). LaunchAgent
+         plists don't expand ~ or $HOME, so __HOME__ is rendered at
+         install time by the Makefile. -->
     <key>StandardOutPath</key>
-    <string>/tmp/mindofagent.log</string>
+    <string>__HOME__/Library/Logs/MindOfAgent/mindofagent.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/mindofagent.log</string>
+    <string>__HOME__/Library/Logs/MindOfAgent/mindofagent.log</string>
 </dict>
 </plist>
