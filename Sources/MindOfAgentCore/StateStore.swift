@@ -4,14 +4,29 @@ import Foundation
 /// by an actor for thread-safety; safe to share across the app.
 ///
 /// `save(_:)` uses `Data.write(to:options:[.atomic])` which on Darwin renames
-/// from a temp file — so a process killed mid-write keeps the previously
-/// committed contents.
+/// from a temp file. That protects against a *process* kill mid-write — the
+/// rename is atomic at the filesystem layer, so partial writes never become
+/// visible. It does **not** guarantee durability against a system crash or
+/// power loss in the seconds after `save` returns: the rename's metadata is
+/// still in the page cache and a kernel panic in that window can lose it.
+/// For full power-loss safety you'd need `fsync` on the temp file plus
+/// `fsync` on the parent directory — out of scope for a small JSON state
+/// file.
 ///
 /// A file that exists but fails to decode (corrupt JSON, schema drift) is
-/// logged to stderr and replaced with defaults — we never crash the app on
-/// disk gore.
+/// **moved aside** to `state.json.corrupt-<unix-timestamp>` and replaced
+/// with defaults — we never crash the app on disk gore, and the original
+/// bytes survive for postmortem / bug-report attachment.
+///
+/// No file lock: two concurrent processes pointed at the same `fileURL`
+/// will see last-writer-wins (the `.atomic` write means no torn writes,
+/// but writes are not serialised across processes). In practice
+/// MindOfAgent is a menu-bar app and users won't double-launch it; if
+/// that changes, switch to an advisory `flock`/`fcntl` strategy.
 public actor StateStore {
-    public let fileURL: URL
+    /// Immutable for the lifetime of the store, so safe to read from any
+    /// isolation context.
+    public nonisolated let fileURL: URL
     private var cached: AppState?
 
     public init(fileURL: URL) {
@@ -57,8 +72,16 @@ public actor StateStore {
             cached = state
             return state
         } catch {
+            // Preserve the original bytes so a future schema-drift bug or a
+            // user bug report has something to inspect. Naming includes a
+            // unix timestamp so repeated corruption events don't overwrite
+            // each other.
+            let backup = fileURL.appendingPathExtension(
+                "corrupt-\(Int(Date().timeIntervalSince1970))"
+            )
+            try? FileManager.default.moveItem(at: fileURL, to: backup)
             FileHandle.standardError.write(Data(
-                "StateStore: corrupt state.json at \(fileURL.path) — replacing with defaults (\(error))\n"
+                "StateStore: corrupt state.json at \(fileURL.path) — moved to \(backup.lastPathComponent), replacing with defaults (\(error))\n"
                     .utf8
             ))
             let defaults = AppState()

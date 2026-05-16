@@ -1,5 +1,5 @@
 import XCTest
-@testable import MindOfAgentCore
+import MindOfAgentCore
 
 final class StateStoreTests: XCTestCase {
 
@@ -70,6 +70,27 @@ final class StateStoreTests: XCTestCase {
         XCTAssertNoThrow(try JSONDecoder().decode(AppState.self, from: recovered))
     }
 
+    /// Regression for the PR #24 review: a corrupt state file is preserved
+    /// as `state.json.corrupt-<unix-timestamp>` next to the original so
+    /// future schema-drift bugs are debuggable. Without this, a single
+    /// drift bug silently nukes every user's clusterId and the cluster
+    /// fragments on next launch.
+    func testCorruptFileIsPreservedAsBackup() async throws {
+        let store = makeStore()
+        let corrupt = Data("{ this is not valid json".utf8)
+        try corrupt.write(to: store.fileURL, options: [.atomic])
+
+        _ = await store.load()
+
+        let siblings = try FileManager.default.contentsOfDirectory(
+            at: tempDir, includingPropertiesForKeys: nil
+        )
+        let backups = siblings.filter { $0.lastPathComponent.contains("corrupt-") }
+        XCTAssertEqual(backups.count, 1, "expected exactly one corrupt-backup file")
+        let restored = try Data(contentsOf: backups[0])
+        XCTAssertEqual(restored, corrupt, "backup must equal the original corrupt bytes")
+    }
+
     // MARK: - update transform
 
     func testUpdateAppliesTransformAndPersists() async throws {
@@ -102,6 +123,24 @@ final class StateStoreTests: XCTestCase {
         let final = await store.load()
         XCTAssertEqual(final.preferredPeers.count, 64)
         XCTAssertEqual(Set(final.preferredPeers).count, 64, "all writes preserved (no last-writer-wins)")
+    }
+
+    // MARK: - clusterId stability
+
+    /// Regression for the PR #24 review: cluster identity must survive
+    /// process restart. If the write-through on first load ever breaks
+    /// (refactor, flag, sandbox-denied write), clusterId would silently
+    /// rotate every launch and peers would stop recognising each other
+    /// across reboots.
+    func testClusterIdIsStableAcrossFreshStoreLoads() async throws {
+        let path = tempDir.appendingPathComponent("state.json")
+
+        let first = await StateStore(fileURL: path).load()
+        // A second StateStore is a fresh actor with an empty cache, so it
+        // must come from disk. Same path ⇒ same clusterId.
+        let second = await StateStore(fileURL: path).load()
+
+        XCTAssertEqual(first.clusterId, second.clusterId, "clusterId must persist across StateStore instances")
     }
 
     // MARK: - defaultURL
