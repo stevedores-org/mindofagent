@@ -6,12 +6,21 @@ SOURCE_BINARY := .build/release/MindOfAgent
 LAUNCH_AGENT_LABEL := io.stevedores.mindofagent
 LAUNCH_AGENT_DIR := $(HOME)/Library/LaunchAgents
 LAUNCH_AGENT_PLIST := $(LAUNCH_AGENT_DIR)/$(LAUNCH_AGENT_LABEL).plist
-PLIST_TEMPLATE := deployment/macos/$(LAUNCH_AGENT_LABEL).plist.template
+LAUNCH_AGENT_TEMPLATE := deployment/macos/$(LAUNCH_AGENT_LABEL).plist.template
+
+LAUNCH_DAEMON_LABEL := com.stevedores.mindofagent
+LAUNCH_DAEMON_DIR := /Library/LaunchDaemons
+LAUNCH_DAEMON_PLIST := $(LAUNCH_DAEMON_DIR)/$(LAUNCH_DAEMON_LABEL).plist
+LAUNCH_DAEMON_TEMPLATE := deployment/macos/$(LAUNCH_DAEMON_LABEL).plist.template
 
 LOG_DIR := $(HOME)/Library/Logs/MindOfAgent
 LOG_FILE := $(LOG_DIR)/mindofagent.log
+DAEMON_LOG := /var/log/mindofagent-daemon.log
 
-.PHONY: help build build-release test install-binary install-launch-agent uninstall-launch-agent uninstall status clean
+.PHONY: help build build-release test install-binary \
+        install-launch-agent uninstall-launch-agent \
+        install-launch-daemon uninstall-launch-daemon \
+        uninstall status daemon-status clean
 
 help:
 	@echo "MindOfAgent — make targets"
@@ -20,9 +29,14 @@ help:
 	@echo "  make build-release          swift build -c release"
 	@echo "  make test                   swift test (requires Xcode for XCTest)"
 	@echo "  make install-launch-agent   build release, install binary, install LaunchAgent, start it"
+	@echo "                              (per-user, menu-bar mode — pick this for an interactive Mac)"
 	@echo "  make uninstall-launch-agent stop and remove the LaunchAgent (binary stays)"
-	@echo "  make uninstall              remove the LaunchAgent AND the installed binary"
-	@echo "  make status                 launchctl print of the agent (debug \"icon not showing\")"
+	@echo "  make install-launch-daemon  install the system-wide LaunchDaemon for headless mode"
+	@echo "                              (root, --daemon, no menu — pick this for a mac-mini cluster node)"
+	@echo "  make uninstall-launch-daemon stop and remove the LaunchDaemon (binary stays)"
+	@echo "  make uninstall              remove BOTH plists AND the installed binary"
+	@echo "  make status                 launchctl print of the user LaunchAgent"
+	@echo "  make daemon-status          launchctl print of the system LaunchDaemon"
 	@echo "  make clean                  rm -rf .build"
 	@echo ""
 	@echo "First-run note: macOS Gatekeeper will block an unsigned binary on"
@@ -61,7 +75,7 @@ install-launch-agent: install-binary
 	@mkdir -p $(LOG_DIR)
 	@sed -e "s|__MINDOFAGENT_BIN__|$(BIN_DIR)/$(BINARY)|g" \
 	     -e "s|__HOME__|$(HOME)|g" \
-	     $(PLIST_TEMPLATE) > $(LAUNCH_AGENT_PLIST)
+	     $(LAUNCH_AGENT_TEMPLATE) > $(LAUNCH_AGENT_PLIST)
 	@echo "==> Installed $(LAUNCH_AGENT_PLIST)"
 	@launchctl bootout gui/$$UID/$(LAUNCH_AGENT_LABEL) 2>/dev/null || true
 	@launchctl bootstrap gui/$$UID $(LAUNCH_AGENT_PLIST)
@@ -74,22 +88,48 @@ uninstall-launch-agent:
 	@echo "==> LaunchAgent removed. Binary at $(BIN_DIR)/$(BINARY) was left in place."
 	@echo "    (Use 'make uninstall' for a full removal.)"
 
-# Full removal: LaunchAgent + binary. Log dir is left in place — logs are
-# user data worth keeping after an uninstall.
-uninstall: uninstall-launch-agent
+# LaunchDaemon (system-wide, root). Installs to /Library/LaunchDaemons,
+# requires sudo for the install + bootstrap, and runs the binary with
+# --daemon so no SwiftUI/MenuBarExtra is started. Right answer for a
+# headless mac-mini cluster node with no logged-in user.
+install-launch-daemon: install-binary
+	@TMP=$$(mktemp) && \
+	sed -e "s|__MINDOFAGENT_BIN__|$(BIN_DIR)/$(BINARY)|g" \
+	    $(LAUNCH_DAEMON_TEMPLATE) > $$TMP && \
+	echo "==> Installing $(LAUNCH_DAEMON_PLIST) (requires sudo)" && \
+	sudo install -m 0644 -o root -g wheel $$TMP $(LAUNCH_DAEMON_PLIST) && \
+	rm -f $$TMP
+	@sudo launchctl bootout system/$(LAUNCH_DAEMON_LABEL) 2>/dev/null || true
+	@sudo launchctl bootstrap system $(LAUNCH_DAEMON_PLIST)
+	@echo "==> LaunchDaemon started — daemon log: $(DAEMON_LOG)"
+
+uninstall-launch-daemon:
+	@sudo launchctl bootout system/$(LAUNCH_DAEMON_LABEL) 2>/dev/null || true
+	@sudo rm -f $(LAUNCH_DAEMON_PLIST)
+	@echo "==> LaunchDaemon removed. Binary at $(BIN_DIR)/$(BINARY) was left in place."
+
+# Full removal: both plists + binary. Log dirs are left in place — logs
+# are debugging artifacts worth keeping after an uninstall.
+uninstall: uninstall-launch-agent uninstall-launch-daemon
 	@if [ ! -w "$(BIN_DIR)" ] && [ -f "$(BIN_DIR)/$(BINARY)" ]; then \
 		echo "==> Removing $(BIN_DIR)/$(BINARY) (requires sudo)"; \
 		sudo rm -f $(BIN_DIR)/$(BINARY); \
 	else \
 		rm -f $(BIN_DIR)/$(BINARY); \
 	fi
-	@echo "==> Fully uninstalled. Logs left in $(LOG_DIR)."
+	@echo "==> Fully uninstalled."
+	@echo "    User logs:   $(LOG_DIR) (left in place)"
+	@echo "    Daemon log:  $(DAEMON_LOG) (left in place)"
 
-# Debug helper. The first thing to check when users say "I installed it
-# but the icon doesn't show" is whether launchd thinks the agent is loaded.
+# Debug helpers. First thing to check when users report "icon doesn't show"
+# (LaunchAgent) or "headless node is offline" (LaunchDaemon).
 status:
 	@launchctl print gui/$$UID/$(LAUNCH_AGENT_LABEL) 2>/dev/null \
 		|| echo "$(LAUNCH_AGENT_LABEL) is not loaded (try: make install-launch-agent)"
+
+daemon-status:
+	@sudo launchctl print system/$(LAUNCH_DAEMON_LABEL) 2>/dev/null \
+		|| echo "$(LAUNCH_DAEMON_LABEL) is not loaded (try: make install-launch-daemon)"
 
 clean:
 	rm -rf .build
