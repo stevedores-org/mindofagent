@@ -102,16 +102,72 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(iface.summary, "en9 [ethernetOrWifi] (down)")
     }
 
+    // MARK: - parse(sockaddr:) — direct exercise of the kernel-decode path
+
+    func testParseReturnsNilForNilSockaddr() {
+        XCTAssertNil(NetworkManager.parse(name: "en0", isUp: true, sockaddr: nil))
+    }
+
+    func testParseDecodesIPv4Sockaddr() {
+        var sin = sockaddr_in()
+        sin.sin_family = sa_family_t(AF_INET)
+        sin.sin_addr.s_addr = in_addr_t(0x0a0b0c0d).bigEndian // 10.11.12.13
+        let result = withUnsafeMutablePointer(to: &sin) { ptr -> NetworkManager.RawAddress? in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                NetworkManager.parse(name: "en0", isUp: true, sockaddr: sa)
+            }
+        }
+        XCTAssertEqual(result?.family, .ipv4)
+        XCTAssertEqual(result?.address, "10.11.12.13")
+    }
+
+    func testParseDecodesIPv6Sockaddr() {
+        var sin6 = sockaddr_in6()
+        sin6.sin6_family = sa_family_t(AF_INET6)
+        // ::1 — loopback. Byte 15 = 1, everything else 0.
+        withUnsafeMutablePointer(to: &sin6.sin6_addr) { addrPtr in
+            addrPtr.withMemoryRebound(to: UInt8.self, capacity: 16) { bytes in
+                for i in 0..<16 { bytes[i] = 0 }
+                bytes[15] = 1
+            }
+        }
+        let result = withUnsafeMutablePointer(to: &sin6) { ptr -> NetworkManager.RawAddress? in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                NetworkManager.parse(name: "lo0", isUp: true, sockaddr: sa)
+            }
+        }
+        XCTAssertEqual(result?.family, .ipv6)
+        XCTAssertEqual(result?.address, "::1")
+    }
+
+    func testParseAFLinkWithNonEthernetLengthYieldsNilAddress() {
+        // Tunnel / point-to-point links have sdl_alen == 0 (no MAC). The
+        // row should still be emitted (family = .link) but with address nil.
+        var dl = sockaddr_dl()
+        dl.sdl_family = sa_family_t(AF_LINK)
+        dl.sdl_nlen = 0
+        dl.sdl_alen = 0
+        let result = withUnsafeMutablePointer(to: &dl) { ptr -> NetworkManager.RawAddress? in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                NetworkManager.parse(name: "utun0", isUp: true, sockaddr: sa)
+            }
+        }
+        XCTAssertEqual(result?.family, .link)
+        XCTAssertNil(result?.address, "AF_LINK with sdl_alen != 6 must yield nil address")
+    }
+
     // MARK: - live smoke test
 
     /// Smoke test against the real kernel — every Mac has at least `lo0`,
-    /// and `lo0` always carries `127.0.0.1`. Not a behavioural test; just
-    /// catches "the live enumeration plumbing got broken."
+    /// and `lo0` always carries `127.0.0.1` plus the IPv6 loopback `::1`.
+    /// Not a behavioural test; just catches "the live enumeration plumbing
+    /// got broken."
     func testLiveEnumerationReturnsLoopback() throws {
         let live = NetworkManager.interfaces()
         let lo = live.first { $0.name == "lo0" }
         XCTAssertNotNil(lo, "lo0 must be present on every Mac")
         XCTAssertTrue(lo!.ipv4.contains("127.0.0.1"), "lo0 must carry 127.0.0.1")
+        XCTAssertTrue(lo!.ipv6.contains("::1"), "lo0 must carry ::1")
         XCTAssertEqual(lo!.kind, .loopback)
     }
 }
