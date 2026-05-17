@@ -7,6 +7,10 @@ import MindOfAgentCore
 @main
 enum AppEntry {
     static func main() {
+        // v0 arg parser: only inspects `args[1]`. Trailing args are
+        // ignored (e.g. `mindofagent ifaces --verbose` silently drops
+        // `--verbose`). When subcommands grow flags, swap in
+        // ArgumentParser; for now the surface is too small to need it.
         let args = CommandLine.arguments
         if args.count >= 2 {
             switch args[1] {

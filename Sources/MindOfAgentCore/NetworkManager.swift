@@ -67,7 +67,7 @@ public enum NetworkManager {
     /// The Thunderbolt-bridge refinement using `SCNetworkInterface` lives in
     /// the #11 issue.
     static func kind(forName name: String, ipv4: [String]) -> NetworkInterface.Kind {
-        if name == "lo0" || name.hasPrefix("lo") { return .loopback }
+        if name.hasPrefix("lo") { return .loopback }
         if name.hasPrefix("utun") || name.hasPrefix("ipsec") { return .vpn }
         if name.hasPrefix("bridge") && ipv4.contains(where: { $0.hasPrefix("169.254.") }) {
             return .thunderboltBridge
@@ -107,8 +107,21 @@ public enum NetworkManager {
 
     #if canImport(Darwin)
     /// Convert a single `sockaddr` (already typed by family) into a
-    /// printable form. Returns `nil` for rows we don't model.
-    private static func parse(
+    /// printable form. Returns `nil` when the row should be skipped
+    /// (null pointer, address-family decode failure).
+    ///
+    /// `internal` rather than `private` so tests can synthesise sockaddr
+    /// values and exercise each branch directly.
+    ///
+    /// IPv6 caveat: the formatted address does NOT include the
+    /// `%scope-id` suffix. `inet_ntop` (unlike `getnameinfo`) never
+    /// emits it, so there's nothing to strip — but callers that want
+    /// to *connect* to a link-local address (`fe80::*`) will need to
+    /// combine `NetworkInterface.name` with `NetworkInterface.ipv6`
+    /// to construct a routable endpoint. Will matter for #13
+    /// (Registration API client); not relevant for the current
+    /// menu / Thunderbolt-classification use cases.
+    static func parse(
         name: String,
         isUp: Bool,
         sockaddr: UnsafeMutablePointer<sockaddr>?
@@ -119,22 +132,31 @@ public enum NetworkManager {
             return sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { ptr in
                 var addr = ptr.pointee.sin_addr
                 var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-                guard inet_ntop(AF_INET, &addr, &buf, socklen_t(INET_ADDRSTRLEN)) != nil else {
-                    return nil
+                let text: String? = buf.withUnsafeMutableBufferPointer { bp in
+                    guard let base = bp.baseAddress,
+                          inet_ntop(AF_INET, &addr, base, socklen_t(INET_ADDRSTRLEN)) != nil
+                    else {
+                        return nil
+                    }
+                    return String(cString: base)
                 }
-                return RawAddress(name: name, family: .ipv4, address: String(cString: buf), isUp: isUp)
+                guard let text else { return nil }
+                return RawAddress(name: name, family: .ipv4, address: text, isUp: isUp)
             }
 
         case AF_INET6:
             return sa.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { ptr in
                 var addr = ptr.pointee.sin6_addr
                 var buf = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
-                guard inet_ntop(AF_INET6, &addr, &buf, socklen_t(INET6_ADDRSTRLEN)) != nil else {
-                    return nil
+                let text: String? = buf.withUnsafeMutableBufferPointer { bp in
+                    guard let base = bp.baseAddress,
+                          inet_ntop(AF_INET6, &addr, base, socklen_t(INET6_ADDRSTRLEN)) != nil
+                    else {
+                        return nil
+                    }
+                    return String(cString: base)
                 }
-                // Strip the scope-id suffix that getnameinfo would surface
-                // (we already have the interface name from getifaddrs).
-                let text = String(cString: buf)
+                guard let text else { return nil }
                 return RawAddress(name: name, family: .ipv6, address: text, isUp: isUp)
             }
 
@@ -144,8 +166,13 @@ public enum NetworkManager {
                 guard dl.sdl_alen == 6 else {
                     return RawAddress(name: name, family: .link, address: nil, isUp: isUp)
                 }
-                // sdl_data is name + addr packed. The MAC starts at
-                // sdl_data[sdl_nlen].
+                // `sdl_data` is declared as a 12-byte tuple in the
+                // imported header, but the kernel always allocates the
+                // full variable-length form (name + addr) inline after
+                // the visible struct — so reading `base[nlen .. nlen+5]`
+                // for names up to ~12 chars is in-bounds at the kernel
+                // allocation, even though Swift sees only 12 declared
+                // bytes. The MAC starts at `sdl_data[sdl_nlen]`.
                 let nlen = Int(dl.sdl_nlen)
                 let bytes = withUnsafePointer(to: dl.sdl_data) { rawPtr in
                     rawPtr.withMemoryRebound(to: UInt8.self, capacity: nlen + 6) { base in
