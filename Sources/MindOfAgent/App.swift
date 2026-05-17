@@ -15,7 +15,7 @@ struct MindOfAgentApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("MindOfAgent", systemImage: "network") {
+        MenuBarExtra("MindOfAgent", systemImage: coordinator.paused ? "network.slash" : "network") {
             MenuView(coordinator: coordinator)
         }
         .menuBarExtraStyle(.window)
