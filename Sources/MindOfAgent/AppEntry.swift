@@ -13,6 +13,8 @@ enum AppEntry {
             case "ifaces":
                 runIfacesSubcommand()
                 exit(0)
+            case "--daemon":
+                runDaemon() // never returns; blocks on RunLoop.main
             case "--help", "-h", "help":
                 printUsage()
                 exit(0)
@@ -31,12 +33,50 @@ enum AppEntry {
         }
     }
 
+    /// Headless mode used by `com.stevedores.mindofagent` LaunchDaemon.
+    /// No SwiftUI, no MenuBarExtra — just Discovery + NodeRegistry + the
+    /// host hardware profile, advertised over Bonjour, with a forever
+    /// RunLoop so the dispatch queues driving NWListener/NWBrowser keep
+    /// firing. Suitable for headless cluster nodes (mac-mini boxes
+    /// without a logged-in user).
+    private static func runDaemon() -> Never {
+        // LaunchDaemons run as root with no logged-in user, so
+        // Host.current().localizedName may return the machine's
+        // unmodified hostname (e.g. "macmini-01.local"). Fine for
+        // mesh identification.
+        let hostname = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        let registry = NodeRegistry()
+        let config = Discovery.Config(hostname: hostname)
+        let discovery = Discovery(config: config, registry: registry)
+
+        do {
+            try discovery.start()
+        } catch {
+            let msg = "mindofagent --daemon: discovery start failed: \(error)\n"
+            FileHandle.standardError.write(Data(msg.utf8))
+            exit(1)
+        }
+
+        print("mindofagent --daemon: started, host=\(hostname)")
+
+        // Surface peer churn into the daemon's log — the only
+        // observability surface a headless box has.
+        registry.subscribe { snap in
+            print("mindofagent --daemon: peers=\(snap.nodes.count)")
+        }
+
+        RunLoop.main.run() // blocks forever
+        exit(0)
+    }
+
     private static func printUsage() {
         print("""
             mindofagent — menu-bar mesh coordinator for Apple Silicon clusters
 
             Usage:
               mindofagent              Launch the menu-bar app (default)
+              mindofagent --daemon     Headless mode — Bonjour mesh without UI
+                                       (used by the LaunchDaemon for cluster nodes)
               mindofagent ifaces       Print active network interfaces and exit
               mindofagent --help       Show this help
             """)
