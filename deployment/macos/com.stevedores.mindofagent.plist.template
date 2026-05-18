@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.stevedores.mindofagent</string>
+
+    <!-- --daemon disables MenuBarExtra and runs Discovery on a forever
+         RunLoop. Required because LaunchDaemons have no GUI session — they
+         can't show a menu bar. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__MINDOFAGENT_BIN__</string>
+        <string>--daemon</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on crash, but don't restart on clean exit (so a manual
+         `launchctl bootout` actually quits). -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- Background QoS — daemon nodes don't have a foreground UI to keep
+         responsive, so this is the honest priority class. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- /var/log is owned by root; the daemon runs as root by default so
+         the writes succeed. /var/log is also wiped less aggressively than
+         /tmp. -->
+    <key>StandardOutPath</key>
+    <string>/var/log/mindofagent-daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/mindofagent-daemon.log</string>
+</dict>
+</plist>
