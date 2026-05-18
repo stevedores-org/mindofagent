@@ -2,7 +2,6 @@ import SwiftUI
 import AppKit
 import MindOfAgentCore
 
-@main
 struct MindOfAgentApp: App {
     @StateObject private var coordinator = AppCoordinator()
 
