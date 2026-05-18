@@ -19,6 +19,7 @@ final class AppCoordinator: ObservableObject {
 
     private let registry: NodeRegistry
     private let discovery: Discovery
+    private let heartbeat: TelemetryHeartbeat
 
     init() {
         // Snapshot the host's hardware profile once at launch. The values
@@ -33,6 +34,13 @@ final class AppCoordinator: ObservableObject {
         self.registry = registry
         self.discovery = Discovery(config: config, registry: registry)
         self.snapshot = registry.snapshot()
+
+        // Heartbeat publishes live cpu_pct / mem_used_mb / mem_pressure
+        // into our Bonjour TXT records every 10s. Peers reading our
+        // browse callback see fresh telemetry without an HTTP round-trip.
+        // Controller-POST sink lands in #13.
+        let sink = BonjourTXTSink(discovery: discovery)
+        self.heartbeat = TelemetryHeartbeat(sinks: [sink], interval: .seconds(10))
 
         registry.subscribe { [weak self] snap in
             // DispatchQueue.main.async preserves FIFO from a single producer
@@ -49,12 +57,22 @@ final class AppCoordinator: ObservableObject {
         } catch {
             self.startupError = "Discovery failed: \(error.localizedDescription)"
         }
+
+        // Kick off the telemetry loop. .start() on an actor needs Task —
+        // the loop is self-contained and we don't need to await it here.
+        Task { [heartbeat] in await heartbeat.start() }
     }
 
     deinit {
         // AppCoordinator is process-lifetime today, but a deinit-paired
         // stop() keeps the NWListener + NWBrowser from leaking if the
-        // coordinator is ever re-created (previews, future tests).
+        // coordinator is ever re-created (previews, future tests). The
+        // heartbeat's Task captures self weakly, so a coordinator dropped
+        // mid-tick will see the next loop iteration find a nil self and
+        // exit cleanly — we still ask politely with stop() to avoid the
+        // stragglers.
+        let hb = heartbeat
+        Task { await hb.stop() }
         discovery.stop()
     }
 
@@ -67,6 +85,8 @@ final class AppCoordinator: ObservableObject {
     func pause() {
         guard !paused else { return }
         discovery.stop()
+        let hb = heartbeat
+        Task { await hb.stop() }
         paused = true
     }
 
@@ -79,6 +99,8 @@ final class AppCoordinator: ObservableObject {
         guard paused else { return }
         do {
             try discovery.start()
+            let hb = heartbeat
+            Task { await hb.start() }
             paused = false
             startupError = nil
         } catch {
