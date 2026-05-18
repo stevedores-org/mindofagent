@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Postinstall script bundled into the .pkg. Runs as root after the
+# payload is staged. Responsible for:
+#   1. Rendering the LaunchAgent plist's __HOME__ placeholder for the
+#      console user (the user who's logged in at install time).
+#   2. Bootstrapping the LaunchDaemon (always system-wide).
+#   3. Bootstrapping the LaunchAgent for the console user so the menu
+#      icon appears immediately (system-wide /Library/LaunchAgents
+#      plists auto-load for users that log in *after* install — the
+#      current session needs an explicit bootstrap).
+
+set -euo pipefail
+
+LAUNCH_AGENT_LABEL="io.stevedores.mindofagent"
+LAUNCH_AGENT_PLIST="/Library/LaunchAgents/$LAUNCH_AGENT_LABEL.plist"
+LAUNCH_DAEMON_LABEL="com.stevedores.mindofagent"
+LAUNCH_DAEMON_PLIST="/Library/LaunchDaemons/$LAUNCH_DAEMON_LABEL.plist"
+
+# Console user — the GUI session owner at install time. `stat -f '%Su'`
+# reads the owner of /dev/console which is the loginwindow user.
+CONSOLE_USER=$(stat -f '%Su' /dev/console)
+CONSOLE_UID=$(stat -f '%u' /dev/console)
+
+if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" ]]; then
+  CONSOLE_HOME=$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory \
+                  | awk '{print $2}')
+  if [[ -n "$CONSOLE_HOME" && -d "$CONSOLE_HOME" ]]; then
+    # Render the plist's __HOME__ for the console user.
+    sed -i '' "s|__HOME__|$CONSOLE_HOME|g" "$LAUNCH_AGENT_PLIST"
+
+    # Make the per-user log directory (the plist's StandardOutPath
+    # writes here — launchd won't create intermediate dirs).
+    mkdir -p "$CONSOLE_HOME/Library/Logs/MindOfAgent"
+    chown -R "$CONSOLE_USER" "$CONSOLE_HOME/Library/Logs/MindOfAgent"
+  fi
+fi
+
+# LaunchDaemon (system) — always installed.
+launchctl bootout "system/$LAUNCH_DAEMON_LABEL" 2>/dev/null || true
+launchctl bootstrap system "$LAUNCH_DAEMON_PLIST"
+
+# LaunchAgent (per-user) — only if there's a console user logged in.
+if [[ -n "$CONSOLE_UID" && "$CONSOLE_UID" != "0" ]]; then
+  launchctl bootout "gui/$CONSOLE_UID/$LAUNCH_AGENT_LABEL" 2>/dev/null || true
+  launchctl bootstrap "gui/$CONSOLE_UID" "$LAUNCH_AGENT_PLIST"
+fi
+
+# Defensive xattr strip — release tarballs sometimes carry quarantine.
+xattr -dr com.apple.quarantine /usr/local/bin/mindofagent 2>/dev/null || true
+
+exit 0

@@ -20,7 +20,7 @@ DAEMON_LOG := /var/log/mindofagent-daemon.log
 .PHONY: help build build-release test install-binary \
         install-launch-agent uninstall-launch-agent \
         install-launch-daemon uninstall-launch-daemon \
-        uninstall status daemon-status clean
+        uninstall status daemon-status pkg clean
 
 help:
 	@echo "MindOfAgent — make targets"
@@ -37,7 +37,10 @@ help:
 	@echo "  make uninstall              remove BOTH plists AND the installed binary"
 	@echo "  make status                 launchctl print of the user LaunchAgent"
 	@echo "  make daemon-status          launchctl print of the system LaunchDaemon"
-	@echo "  make clean                  rm -rf .build"
+	@echo "  make pkg                    build a distributable .pkg installer in dist/"
+	@echo "                              (set DEVELOPER_ID_INSTALLER='Developer ID Installer: …'"
+	@echo "                              to sign; unsigned otherwise)"
+	@echo "  make clean                  rm -rf .build dist"
 	@echo ""
 	@echo "First-run note: macOS Gatekeeper will block an unsigned binary on"
 	@echo "first launch. The install target strips the quarantine xattr"
@@ -131,5 +134,8 @@ daemon-status:
 	@sudo launchctl print system/$(LAUNCH_DAEMON_LABEL) 2>/dev/null \
 		|| echo "$(LAUNCH_DAEMON_LABEL) is not loaded (try: make install-launch-daemon)"
 
+pkg:
+	@VERSION="$${VERSION:-0.1.0}" scripts/build-pkg.sh
+
 clean:
-	rm -rf .build
+	rm -rf .build dist
