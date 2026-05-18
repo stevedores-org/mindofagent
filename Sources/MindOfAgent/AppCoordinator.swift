@@ -21,9 +21,15 @@ final class AppCoordinator: ObservableObject {
     private let discovery: Discovery
 
     init() {
-        let hostname = Host.current().localizedName ?? "mac-node"
+        // Snapshot the host's hardware profile once at launch. The values
+        // feed Bonjour TXT records so peers see chip + memory + model in
+        // their menu without needing an HTTP probe back to us.
+        let profile = HardwareProfiler.getProfile()
         let registry = NodeRegistry()
-        let config = Discovery.Config(hostname: hostname)
+        let config = Discovery.Config(
+            hostname: profile.hostname,
+            txtRecord: profile.txtRecord
+        )
         self.registry = registry
         self.discovery = Discovery(config: config, registry: registry)
         self.snapshot = registry.snapshot()
