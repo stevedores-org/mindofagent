@@ -16,10 +16,12 @@ final class AppCoordinator: ObservableObject {
     @Published private(set) var snapshot: NodeRegistry.Snapshot
     @Published private(set) var startupError: String?
     @Published private(set) var paused: Bool = false
+    @Published private(set) var thunderboltBridge: NetworkInterface?
 
     private let registry: NodeRegistry
     private let discovery: Discovery
     private let heartbeat: TelemetryHeartbeat
+    private var thunderboltTimer: Timer?
 
     init() {
         // Snapshot the host's hardware profile once at launch. The values
@@ -61,6 +63,22 @@ final class AppCoordinator: ObservableObject {
         // Kick off the telemetry loop. .start() on an actor needs Task —
         // the loop is self-contained and we don't need to await it here.
         Task { [heartbeat] in await heartbeat.start() }
+
+        // Poll the Thunderbolt-bridge state every 5s so the menu reflects
+        // cables being plugged/unplugged without a manual refresh. SC
+        // doesn't surface a Combine-friendly observer for interface state,
+        // and a 5s tick keeps overhead trivial.
+        refreshThunderbolt()
+        thunderboltTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            // Inner `[weak self]` is required for Swift 5.9 / Xcode 15.4
+            // region analysis: without it, the Task closure is flagged as
+            // capturing `self` from the outer closure's optional, which
+            // crosses isolation domains. The double weak-capture has no
+            // runtime cost — both unwrap the same reference.
+            Task { @MainActor [weak self] in
+                self?.refreshThunderbolt()
+            }
+        }
     }
 
     deinit {
@@ -71,9 +89,19 @@ final class AppCoordinator: ObservableObject {
         // mid-tick will see the next loop iteration find a nil self and
         // exit cleanly — we still ask politely with stop() to avoid the
         // stragglers.
+        thunderboltTimer?.invalidate()
         let hb = heartbeat
         Task { await hb.stop() }
         discovery.stop()
+    }
+
+    // MARK: - Thunderbolt
+
+    /// Refresh the cached Thunderbolt bridge state. Public so callers can
+    /// trigger an immediate update (e.g. after a user reports plugging
+    /// in a cable).
+    func refreshThunderbolt() {
+        thunderboltBridge = NetworkManager.thunderboltBridge()
     }
 
     // MARK: - Pause / resume
