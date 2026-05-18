@@ -22,7 +22,14 @@ public struct NullTelemetrySink: TelemetrySink {
 ///
 /// `cpu_pct` is formatted to one decimal place — TXT records are size-
 /// limited and the extra precision isn't useful.
-public final class BonjourTXTSink: TelemetrySink {
+///
+/// `@unchecked Sendable` because `Discovery` is itself `@unchecked
+/// Sendable` (its internal state is serialised via its own dispatch
+/// queue). This sink holds only an immutable `let` reference to that
+/// Discovery, so Sendable-via-immutability would also synthesise, but
+/// stating it explicitly keeps the conformance honest under strict
+/// concurrency checking.
+public final class BonjourTXTSink: TelemetrySink, @unchecked Sendable {
     private let discovery: Discovery
 
     public init(discovery: Discovery) {

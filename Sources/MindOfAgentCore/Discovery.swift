@@ -83,6 +83,13 @@ public final class Discovery: @unchecked Sendable {
     /// Existing keys are overwritten; non-overlapping keys are preserved.
     /// `host` is restored to `config.hostname` if a caller tries to
     /// overwrite it — the hostname is identity, not a per-tick value.
+    ///
+    /// **Precondition: `start()` has been called.** If the listener
+    /// hasn't been created yet, the update silently no-ops — there is
+    /// no service to publish to. Callers that wire a sink before
+    /// `start()` (e.g. `TelemetryHeartbeat` configured at `init` time)
+    /// must rely on the heartbeat interval being long enough that
+    /// `start()` lands first, or sequence the calls explicitly.
     public func updateTXT(_ additions: [String: String]) {
         queue.async { [self] in
             guard let listener else { return }
