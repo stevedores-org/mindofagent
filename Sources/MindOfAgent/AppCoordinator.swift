@@ -58,7 +58,12 @@ final class AppCoordinator: ObservableObject {
         // and a 5s tick keeps overhead trivial.
         refreshThunderbolt()
         thunderboltTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            // Inner `[weak self]` is required for Swift 5.9 / Xcode 15.4
+            // region analysis: without it, the Task closure is flagged as
+            // capturing `self` from the outer closure's optional, which
+            // crosses isolation domains. The double weak-capture has no
+            // runtime cost — both unwrap the same reference.
+            Task { @MainActor [weak self] in
                 self?.refreshThunderbolt()
             }
         }
