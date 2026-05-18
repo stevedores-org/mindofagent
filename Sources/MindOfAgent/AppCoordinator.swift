@@ -16,9 +16,11 @@ final class AppCoordinator: ObservableObject {
     @Published private(set) var snapshot: NodeRegistry.Snapshot
     @Published private(set) var startupError: String?
     @Published private(set) var paused: Bool = false
+    @Published private(set) var thunderboltBridge: NetworkInterface?
 
     private let registry: NodeRegistry
     private let discovery: Discovery
+    private var thunderboltTimer: Timer?
 
     init() {
         // Snapshot the host's hardware profile once at launch. The values
@@ -49,13 +51,34 @@ final class AppCoordinator: ObservableObject {
         } catch {
             self.startupError = "Discovery failed: \(error.localizedDescription)"
         }
+
+        // Poll the Thunderbolt-bridge state every 5s so the menu reflects
+        // cables being plugged/unplugged without a manual refresh. SC
+        // doesn't surface a Combine-friendly observer for interface state,
+        // and a 5s tick keeps overhead trivial.
+        refreshThunderbolt()
+        thunderboltTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshThunderbolt()
+            }
+        }
     }
 
     deinit {
         // AppCoordinator is process-lifetime today, but a deinit-paired
         // stop() keeps the NWListener + NWBrowser from leaking if the
         // coordinator is ever re-created (previews, future tests).
+        thunderboltTimer?.invalidate()
         discovery.stop()
+    }
+
+    // MARK: - Thunderbolt
+
+    /// Refresh the cached Thunderbolt bridge state. Public so callers can
+    /// trigger an immediate update (e.g. after a user reports plugging
+    /// in a cable).
+    func refreshThunderbolt() {
+        thunderboltBridge = NetworkManager.thunderboltBridge()
     }
 
     // MARK: - Pause / resume
