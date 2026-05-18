@@ -26,10 +26,17 @@ public final class Discovery: @unchecked Sendable {
     private let queue = DispatchQueue(label: "io.stevedores.mindofagent.discovery")
     private var listener: NWListener?
     private var browser: NWBrowser?
+    /// Current live TXT record. Starts as `config.txtRecord` augmented
+    /// with `host`; mutated by `updateTXT(_:)`. Held on the discovery
+    /// queue so updates from any thread serialise.
+    private var liveTXT: [String: String]
 
     public init(config: Config, registry: NodeRegistry = NodeRegistry()) {
         self.config = config
         self.registry = registry
+        var initial = config.txtRecord
+        initial["host"] = config.hostname
+        self.liveTXT = initial
     }
 
     public func start() throws {
@@ -50,21 +57,41 @@ public final class Discovery: @unchecked Sendable {
         let params = NWParameters.tcp
         let endpointPort = NWEndpoint.Port(rawValue: config.port) ?? .any
         let listener = try NWListener(using: params, on: endpointPort)
-        var txt = config.txtRecord
-        txt["host"] = config.hostname
-        let descriptor = NWListener.Service(
-            name: config.hostname,
-            type: Discovery.serviceType,
-            domain: nil,
-            txtRecord: NWTXTRecord(txt)
-        )
-        listener.service = descriptor
+        listener.service = makeServiceDescriptor(txt: liveTXT)
         listener.newConnectionHandler = { connection in
             // v0: accept and immediately cancel. Health endpoint comes in v0.2.
             connection.cancel()
         }
         listener.start(queue: queue)
         self.listener = listener
+    }
+
+    private func makeServiceDescriptor(txt: [String: String]) -> NWListener.Service {
+        NWListener.Service(
+            name: config.hostname,
+            type: Discovery.serviceType,
+            domain: nil,
+            txtRecord: NWTXTRecord(txt)
+        )
+    }
+
+    /// Merge `additions` into the live TXT record and re-publish the
+    /// service. Setting `listener.service` triggers Bonjour to send a
+    /// goodbye + fresh announcement, so peers see the updated record
+    /// within the next browse callback.
+    ///
+    /// Existing keys are overwritten; non-overlapping keys are preserved.
+    /// `host` is restored to `config.hostname` if a caller tries to
+    /// overwrite it — the hostname is identity, not a per-tick value.
+    public func updateTXT(_ additions: [String: String]) {
+        queue.async { [self] in
+            guard let listener else { return }
+            for (key, value) in additions {
+                liveTXT[key] = value
+            }
+            liveTXT["host"] = config.hostname
+            listener.service = makeServiceDescriptor(txt: liveTXT)
+        }
     }
 
     // MARK: - Browse
