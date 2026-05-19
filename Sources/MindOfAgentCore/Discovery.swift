@@ -11,10 +11,16 @@ public final class Discovery: @unchecked Sendable {
 
     public struct Config: Sendable {
         public var hostname: String
-        public var port: UInt16
+        /// TCP port to listen on. `nil` (the default) asks the OS to pick
+        /// any free port, which is then published in the Bonjour TXT
+        /// record as `port` once the listener becomes ready. Pass a fixed
+        /// value here only when something external (firewall rule, well-
+        /// known peer config) depends on the port being stable, and
+        /// accept that startup fails when that port is already held.
+        public var port: UInt16?
         public var txtRecord: [String: String]
 
-        public init(hostname: String, port: UInt16 = 52480, txtRecord: [String: String] = [:]) {
+        public init(hostname: String, port: UInt16? = nil, txtRecord: [String: String] = [:]) {
             self.hostname = hostname
             self.port = port
             self.txtRecord = txtRecord
@@ -64,12 +70,26 @@ public final class Discovery: @unchecked Sendable {
 
     private func advertise() throws {
         let params = NWParameters.tcp
-        let endpointPort = NWEndpoint.Port(rawValue: config.port) ?? .any
+        let endpointPort: NWEndpoint.Port =
+            config.port.flatMap(NWEndpoint.Port.init(rawValue:)) ?? .any
         let listener = try NWListener(using: params, on: endpointPort)
         listener.service = makeServiceDescriptor(txt: liveTXT)
         listener.newConnectionHandler = { connection in
             // v0: accept and immediately cancel. Health endpoint comes in v0.2.
             connection.cancel()
+        }
+        // When the listener reaches `.ready`, the OS has bound a concrete
+        // port (whether we asked for `.any` or a fixed value). Publish it
+        // in the TXT record so peers reading our browse result can dial
+        // without endpoint resolution. Capturing `listener` directly
+        // avoids racing with the `self.listener = listener` write below.
+        listener.stateUpdateHandler = { [weak self] state in
+            guard case .ready = state, let port = listener.port?.rawValue else { return }
+            self?.queue.async { [weak self] in
+                guard let self else { return }
+                self.liveTXT["port"] = String(port)
+                listener.service = self.makeServiceDescriptor(txt: self.liveTXT)
+            }
         }
         listener.start(queue: queue)
         self.listener = listener

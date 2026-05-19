@@ -21,9 +21,19 @@ struct MindOfAgentApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("MindOfAgent", systemImage: coordinator.paused ? "network.slash" : "network") {
+        MenuBarExtra("MindOfAgent", systemImage: menuBarSystemImage) {
             MenuView(coordinator: coordinator)
         }
         .menuBarExtraStyle(.window)
+    }
+
+    /// Menu-bar glyph reflects the current operating state so a launch
+    /// failure is visible without opening the menu. Precedence:
+    /// `startupError` beats `paused` beats normal — an app whose resume
+    /// failed shows the error glyph rather than the paused one.
+    private var menuBarSystemImage: String {
+        if coordinator.startupError != nil { return "exclamationmark.triangle" }
+        if coordinator.paused { return "network.slash" }
+        return "network"
     }
 }
