@@ -22,6 +22,9 @@ enum AppEntry {
             case "--help", "-h", "help":
                 printUsage()
                 exit(0)
+            case "--version", "-v", "version":
+                print("mindofagent \(Self.version)")
+                exit(0)
             default:
                 FileHandle.standardError.write(Data("unknown subcommand: \(args[1])\n".utf8))
                 printUsage()
@@ -30,6 +33,11 @@ enum AppEntry {
         }
         MindOfAgentApp.main()
     }
+
+    /// Build-time version string. Bumped at release time alongside the
+    /// git tag. Read by `mindofagent --version` and could feed a
+    /// `version` TXT-record key in a future release.
+    static let version = "1.0.0"
 
     private static func runIfacesSubcommand() {
         for iface in NetworkManager.interfaces() {
@@ -82,6 +90,7 @@ enum AppEntry {
               mindofagent --daemon     Headless mode — Bonjour mesh without UI
                                        (used by the LaunchDaemon for cluster nodes)
               mindofagent ifaces       Print active network interfaces and exit
+              mindofagent --version    Print the version and exit
               mindofagent --help       Show this help
             """)
     }

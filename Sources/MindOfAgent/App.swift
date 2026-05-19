@@ -20,8 +20,17 @@ struct MindOfAgentApp: App {
         _coordinator = StateObject(wrappedValue: AppCoordinator(controllerURL: configuredURL))
     }
 
+    /// Pick the menu-bar icon by precedence: startup error wins
+    /// (visible from outside the menu — closes the "menu-bar zombie"
+    /// flagged in #43), then paused, then the normal network glyph.
+    private var iconName: String {
+        if coordinator.startupError != nil { return "exclamationmark.triangle.fill" }
+        if coordinator.paused { return "network.slash" }
+        return "network"
+    }
+
     var body: some Scene {
-        MenuBarExtra("MindOfAgent", systemImage: coordinator.paused ? "network.slash" : "network") {
+        MenuBarExtra("MindOfAgent", systemImage: iconName) {
             MenuView(coordinator: coordinator)
         }
         .menuBarExtraStyle(.window)

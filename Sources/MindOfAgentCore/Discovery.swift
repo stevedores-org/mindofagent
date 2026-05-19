@@ -11,10 +11,16 @@ public final class Discovery: @unchecked Sendable {
 
     public struct Config: Sendable {
         public var hostname: String
+        /// TCP port for the advertise listener. `0` (default) ⇒ kernel
+        /// picks a free ephemeral port. A non-zero preferred port is
+        /// honored when free, otherwise binding fails and `start()`
+        /// throws — avoid hardcoded ports unless you actually need
+        /// a fixed one. Bonjour publishes the actual bound port
+        /// regardless, so peers always resolve correctly.
         public var port: UInt16
         public var txtRecord: [String: String]
 
-        public init(hostname: String, port: UInt16 = 52480, txtRecord: [String: String] = [:]) {
+        public init(hostname: String, port: UInt16 = 0, txtRecord: [String: String] = [:]) {
             self.hostname = hostname
             self.port = port
             self.txtRecord = txtRecord
@@ -64,12 +70,30 @@ public final class Discovery: @unchecked Sendable {
 
     private func advertise() throws {
         let params = NWParameters.tcp
-        let endpointPort = NWEndpoint.Port(rawValue: config.port) ?? .any
+        // port = 0 ⇒ `.any` (kernel picks ephemeral). A configured
+        // non-zero port is honored when free; if it's held, `try NWListener(...)`
+        // throws and `start()` surfaces that to `AppCoordinator.startupError`.
+        let endpointPort: NWEndpoint.Port = config.port == 0
+            ? .any
+            : (NWEndpoint.Port(rawValue: config.port) ?? .any)
         let listener = try NWListener(using: params, on: endpointPort)
         listener.service = makeServiceDescriptor(txt: liveTXT)
         listener.newConnectionHandler = { connection in
             // v0: accept and immediately cancel. Health endpoint comes in v0.2.
             connection.cancel()
+        }
+        // Once the listener resolves a real port (kernel-assigned or
+        // requested), publish it as a TXT entry so peers can read the
+        // port without relying on NWConnection-based resolution. The
+        // stateUpdateHandler fires on the discovery queue.
+        listener.stateUpdateHandler = { [weak self] state in
+            guard case .ready = state, let self else { return }
+            if let actual = listener.port {
+                self.queue.async {
+                    self.liveTXT["port"] = String(actual.rawValue)
+                    listener.service = self.makeServiceDescriptor(txt: self.liveTXT)
+                }
+            }
         }
         listener.start(queue: queue)
         self.listener = listener
