@@ -11,10 +11,45 @@ struct MenuView: View {
             Divider()
             peerList
             Divider()
+            thunderboltStatus
+            Divider()
             footer
         }
         .padding(10)
         .frame(minWidth: 260)
+    }
+
+    /// One-line summary of the Thunderbolt bridge state. Mirrors what
+    /// System Settings → Network shows, plus the peer count from our
+    /// own registry so the user can see "Thunderbolt up, peers showing"
+    /// vs "Thunderbolt up, no peers — other node not running" at a glance.
+    @ViewBuilder
+    private var thunderboltStatus: some View {
+        if let tb = coordinator.thunderboltBridge {
+            HStack {
+                Image(systemName: "bolt.fill")
+                    .foregroundStyle(.blue)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Thunderbolt: \(tb.name)")
+                        .font(.callout)
+                    if let v4 = tb.ipv4.first {
+                        Text(v4)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+            }
+        } else {
+            HStack {
+                Image(systemName: "bolt.slash")
+                    .foregroundStyle(.secondary)
+                Text("Thunderbolt: not connected")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+        }
     }
 
     private var header: some View {
