@@ -12,12 +12,56 @@ struct MenuView: View {
             peerList
             Divider()
             thunderboltStatus
+            controllerStatus
             Divider()
             footer
         }
         .padding(10)
         .frame(minWidth: 260)
     }
+
+    /// Surfaces the controller-registration status when a controllerURL
+    /// is configured. Hidden entirely in mesh-only mode (the v0 default)
+    /// — no row at all, not even a "not configured" line, to keep the
+    /// menu tight for users who don't use a controller.
+    @ViewBuilder
+    private var controllerStatus: some View {
+        // Bind to locals so SwiftUI's ViewBuilder doesn't trip over the
+        // mix of `||` and `@Published` access on a @MainActor coordinator.
+        let registeredAt = coordinator.lastRegistrationAt
+        let statusError = coordinator.lastRegistrationStatus
+        if registeredAt != nil || statusError != nil {
+            HStack(spacing: 6) {
+                if statusError != nil {
+                    Image(systemName: "exclamationmark.cloud")
+                        .foregroundStyle(.orange)
+                } else {
+                    Image(systemName: "checkmark.icloud.fill")
+                        .foregroundStyle(.green)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    if let at = registeredAt {
+                        Text("Controller registered \(Self.timeFormatter.string(from: at))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let err = statusError {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Spacer()
+            }
+        }
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .medium
+        return f
+    }()
 
     /// One-line summary of the Thunderbolt bridge state. Mirrors what
     /// System Settings → Network shows, plus the peer count from our
