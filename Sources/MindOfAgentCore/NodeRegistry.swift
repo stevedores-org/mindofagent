@@ -39,12 +39,17 @@ public final class NodeRegistry: @unchecked Sendable {
         dispatchNotify(snap, observers: snapshotObservers)
     }
 
+    /// Remove a node by id. Observers are only notified when an entry
+    /// was actually removed — a remove of an unknown id is a true no-op
+    /// (no spurious snapshot fan-out at scale).
     public func remove(id: String) {
-        let (snap, snapshotObservers) = queue.sync { () -> (Snapshot, [(Snapshot) -> Void]) in
-            storage.removeValue(forKey: id)
+        let result = queue.sync { () -> (Snapshot, [(Snapshot) -> Void])? in
+            guard storage.removeValue(forKey: id) != nil else { return nil }
             return (makeSnapshotLocked(), observers)
         }
-        dispatchNotify(snap, observers: snapshotObservers)
+        if let (snap, snapshotObservers) = result {
+            dispatchNotify(snap, observers: snapshotObservers)
+        }
     }
 
     public func snapshot() -> Snapshot {
