@@ -95,6 +95,44 @@ final class NodeRegistryTests: XCTestCase {
         XCTAssertEqual(registry.snapshot().nodes.count, 1)
     }
 
+    /// Regression for the PR #19 review (#28 follow-up): a remove of an
+    /// unknown id used to fan out observer notifications even though
+    /// nothing changed. At scale this caused UI churn — the menu would
+    /// redraw on every Discovery.handle stale-cleanup pass even when
+    /// no peers had actually left.
+    func testRemoveOfUnknownIdDoesNotFireObservers() {
+        let registry = NodeRegistry()
+        registry.upsert(Self.makeNode(id: "a", hostname: "alpha"))
+
+        // Synchronise on the initial-subscribe fire, then count observer
+        // fires until the test deadline expires.
+        let initial = expectation(description: "initial fire")
+        let lock = NSLock()
+        var count = 0
+        registry.subscribe { _ in
+            lock.lock(); defer { lock.unlock() }
+            count += 1
+            if count == 1 { initial.fulfill() }
+        }
+        wait(for: [initial], timeout: 2)
+
+        registry.remove(id: "does-not-exist")
+
+        // Wait long enough for any spurious notification to have landed
+        // on the notify queue.
+        let waiter = expectation(description: "settle")
+        registry.subscribe { _ in waiter.fulfill() }
+        wait(for: [waiter], timeout: 2)
+
+        // The first observer's `count` increments on every fire to its
+        // handler. The second observer doesn't touch `count`. So `count`
+        // should stay at 1 (the first observer's initial fire) — if the
+        // no-op remove had fanned out, the first observer would have
+        // fired again and we'd see 2.
+        lock.lock(); defer { lock.unlock() }
+        XCTAssertEqual(count, 1, "no-op remove must not fire observers (would be ≥2 if it did)")
+    }
+
     // MARK: - snapshot ordering
 
     func testSnapshotSortsByHostname() {
@@ -185,6 +223,36 @@ final class NodeRegistryTests: XCTestCase {
         }
 
         XCTAssertEqual(group.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(registry.snapshot().nodes.count, count)
+    }
+
+    /// Concurrency test with a live observer subscribed — verifies the
+    /// notify-outside-lock semantics hold under contention. PR #19
+    /// review (#28 follow-up): the bare concurrency test didn't exercise
+    /// observer fan-out, which is where lock contention would actually
+    /// bite if the implementation regressed.
+    func testConcurrentUpsertConvergesWithObserverSubscribed() {
+        let registry = NodeRegistry()
+        let observerFired = expectation(description: "observer received at least one fire")
+        let lock = NSLock()
+        var fireCount = 0
+        registry.subscribe { _ in
+            lock.lock(); defer { lock.unlock() }
+            fireCount += 1
+            if fireCount == 1 { observerFired.fulfill() }
+        }
+
+        let count = 128
+        let group = DispatchGroup()
+        let concurrent = DispatchQueue(label: "test.concurrent.obs", attributes: .concurrent)
+        for i in 0..<count {
+            concurrent.async(group: group) {
+                registry.upsert(Self.makeNode(id: "n-\(i)", hostname: "host-\(i)"))
+            }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 5), .success)
+        wait(for: [observerFired], timeout: 5)
         XCTAssertEqual(registry.snapshot().nodes.count, count)
     }
 

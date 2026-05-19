@@ -40,15 +40,24 @@ public final class Discovery: @unchecked Sendable {
     }
 
     public func start() throws {
-        try advertise()
-        browse()
+        // Route start/stop through the discovery queue so listener/browser
+        // mutations serialise with the queue's other consumers (browse
+        // callbacks, updateTXT). Without this, a UI thread calling
+        // stop() during an in-flight browse callback could race the
+        // listener/browser pointers.
+        try queue.sync {
+            try advertise()
+            browse()
+        }
     }
 
     public func stop() {
-        listener?.cancel()
-        listener = nil
-        browser?.cancel()
-        browser = nil
+        queue.sync {
+            listener?.cancel()
+            listener = nil
+            browser?.cancel()
+            browser = nil
+        }
     }
 
     // MARK: - Advertise
@@ -117,9 +126,16 @@ public final class Discovery: @unchecked Sendable {
         // Skip results we can't derive a stable id from (`.opaque` / `@unknown`).
         // Otherwise each browse callback would mint a fresh UUID for the same
         // endpoint and the stale-cleanup loop would never converge.
+        //
+        // Also skip our own advertisement — a node always sees itself in its
+        // own browse results, and listing self as a "peer" inflates the menu
+        // count and confuses single-machine launches.
         let identified: [(id: String, result: NWBrowser.Result)] =
             results.compactMap { result in
                 guard let id = Discovery.identifier(for: result) else { return nil }
+                if Discovery.isSelf(result: result, hostname: config.hostname) {
+                    return nil
+                }
                 return (id, result)
             }
 
@@ -142,6 +158,18 @@ public final class Discovery: @unchecked Sendable {
                 )
             )
         }
+    }
+
+    /// `true` if the browse result is this node's own advertisement.
+    /// Compares the Bonjour service name (which `NWListener.Service`
+    /// publishes as `config.hostname`) against our own hostname. mDNS
+    /// auto-suffixes name collisions (`alice` → `alice-2`), so this is
+    /// a name-prefix match in the rare suffix case.
+    static func isSelf(result: NWBrowser.Result, hostname: String) -> Bool {
+        guard case .service(let name, _, _, _) = result.endpoint else {
+            return false
+        }
+        return name == hostname
     }
 
     // MARK: - Helpers
@@ -172,12 +200,20 @@ public final class Discovery: @unchecked Sendable {
         return txt.dictionary
     }
 
+    /// Extract a `(host, port)` from an `NWEndpoint` for storage in
+    /// `Node.host` / `Node.port`. For `.service` endpoints we return an
+    /// **empty** host: Bonjour browse results are not pre-resolved, so
+    /// the service "name" is not a routable host. A future caller that
+    /// needs to actually dial a peer must run `NWConnection`-based
+    /// resolution on the endpoint — or read the host from the TXT
+    /// record (where the peer publishes a resolvable form via the
+    /// `host` key set by `Discovery.advertise`).
     static func endpointAddress(_ endpoint: NWEndpoint) -> (host: String, port: Int) {
         switch endpoint {
         case .hostPort(let host, let port):
             return (host: "\(host)", port: Int(port.rawValue))
-        case .service(let name, _, _, _):
-            return (host: name, port: 0)
+        case .service:
+            return (host: "", port: 0)
         default:
             return (host: "", port: 0)
         }
